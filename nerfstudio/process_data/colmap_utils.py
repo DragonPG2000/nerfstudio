@@ -41,6 +41,7 @@ from nerfstudio.process_data.process_data_utils import CameraModel
 from nerfstudio.utils import colormaps
 from nerfstudio.utils.rich_utils import CONSOLE, status
 from nerfstudio.utils.scripts import run_command
+import nerfstudio.process_data.canonicalize_camera_poses as canonicalize_camera_poses
 
 
 def get_colmap_version(colmap_cmd: str, default_version: str = "3.8") -> Version:
@@ -457,10 +458,15 @@ def colmap_to_json(
             frame["depth_file_path"] = str(depth_path.relative_to(depth_path.parent.parent))
         frames.append(frame)
 
+        frames = canonicalize_camera_poses.canonicalize_camera_poses(frames)
+
     if set(cam_id_to_camera.keys()) != {1}:
         raise RuntimeError("Only single camera shared for all images is supported.")
     out = parse_colmap_camera_params(cam_id_to_camera[1])
     out["frames"] = frames
+
+    out = canonicalize_camera_poses.center_roi(out)
+
 
     applied_transform = None
     if not keep_original_world_coordinate:

@@ -100,6 +100,7 @@ class Nerfstudio(DataParser):
         mask_filenames = []
         depth_filenames = []
         poses = []
+        hs_filenames = []
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -181,6 +182,11 @@ class Nerfstudio(DataParser):
                 depth_filepath = Path(frame["depth_file_path"])
                 depth_fname = self._get_fname(depth_filepath, data_dir, downsample_folder_prefix="depths_")
                 depth_filenames.append(depth_fname)
+            
+            if "hyperspectral_file_path" in frame:
+                hs_filepath = Path(frame["hyperspectral_file_path"])
+                hs_fname = self._get_fname(hs_filepath, data_dir, downsample_folder_prefix="hss_")
+                hs_filenames.append(hs_fname)
 
         assert len(mask_filenames) == 0 or (len(mask_filenames) == len(image_filenames)), """
         Different number of image and mask filenames.
@@ -189,6 +195,11 @@ class Nerfstudio(DataParser):
         assert len(depth_filenames) == 0 or (len(depth_filenames) == len(image_filenames)), """
         Different number of image and depth filenames.
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
+        """
+
+        assert len(hs_filenames) == 0 or (len(hs_filenames) == len(image_filenames)), """
+        Different number of image and hyperspectral filenames.
+        You should check that hs_file_path is specified for every frame (or zero frames) in transforms.json.
         """
 
         has_split_files_spec = any(f"{split}_filenames" in meta for split in ("train", "val", "test"))
@@ -252,6 +263,8 @@ class Nerfstudio(DataParser):
         image_filenames = [image_filenames[i] for i in indices]
         mask_filenames = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
         depth_filenames = [depth_filenames[i] for i in indices] if len(depth_filenames) > 0 else []
+        hs_filenames = [hs_filenames[i] for i in indices] if len(hs_filenames) > 0 else []
+
 
         idx_tensor = torch.tensor(indices, dtype=torch.long)
         poses = poses[idx_tensor]
@@ -414,6 +427,7 @@ class Nerfstudio(DataParser):
                 "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                 "mask_color": self.config.mask_color,
+                "hs_filenames": hs_filenames if len(hs_filenames) > 0 else None,
                 **metadata,
             },
         )
