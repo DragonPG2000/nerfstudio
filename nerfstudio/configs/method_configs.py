@@ -86,6 +86,7 @@ descriptions = {
     "neus": "Implementation of NeuS. (slow)",
     "neus-facto": "Implementation of NeuS-Facto. (slow)",
     "splatfacto": "Gaussian Splatting model",
+    "hyperspectral-splatfacto-rgb": "Hyperspectral Splatting model",
 }
 
 method_configs["nerfacto"] = TrainerConfig(
@@ -643,7 +644,7 @@ method_configs["splatfacto"] = TrainerConfig(
             dataparser=NerfstudioDataParserConfig(load_3D_points=True),
             cache_images_type="uint8",
         ),
-        model=SplatfactoModelConfig(),
+        model=SplatfactoModelConfig(background_color="black"),
     ),
     optimizers={
         "means": {
@@ -679,7 +680,7 @@ method_configs["splatfacto"] = TrainerConfig(
     vis="viewer",
 )
 
-method_configs["hyperspectral-splatfacto"] = TrainerConfig(
+method_configs["hyperspectral-splatfacto-rgb"] = TrainerConfig(
     method_name="splatfacto",
     steps_per_eval_image=100,
     steps_per_eval_batch=0,
@@ -693,12 +694,12 @@ method_configs["hyperspectral-splatfacto"] = TrainerConfig(
             dataparser=NerfstudioDataParserConfig(load_3D_points=True),
             cache_images_type="uint8",
         ),
-        model=SplatfactoModelConfig(),
+        model=SplatfactoModelConfig(background_color="black", hyperspectral=True,hyperspectral_channels=[i for i in range(141)]),
     ),
 
     optimizers={
         "means": {
-            "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
+            "optimizer": AdamOptimizerConfig(lr=1.6e-5, eps=1e-15),
             "scheduler": ExponentialDecaySchedulerConfig(
                 lr_final=1.6e-6,
                 max_steps=30000,

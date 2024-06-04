@@ -146,6 +146,10 @@ class SplatfactoModelConfig(ModelConfig):
     However, PLY exported with antialiased rasterize mode is not compatible with classic mode. Thus many web viewers that
     were implemented for classic mode can not render antialiased mode PLY properly without modifications.
     """
+    hyperspectral: bool = False
+    """If True, the model will output hyperspectral pseudo images with 49, 36, 26 channels for RGB wavelengths 620, 555, 503 nm respectively."""
+    hyperspectral_channels: List[int] = field(default_factory=lambda: [620, 555, 503])
+    """If hyperspectral is True, this list should contain the wavelengths of the hyperspectral channels."""
 
 
 class SplatfactoModel(Model):
@@ -165,6 +169,10 @@ class SplatfactoModel(Model):
     ):
         self.seed_points = seed_points
         super().__init__(*args, **kwargs)
+
+        self.rgb_output_channels = [i for i in range(141)] # 141 channels for hyperspectral
+        self.rgb_output_channels.sort()
+        print(f"RGB output channels: {self.rgb_output_channels}")
 
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
@@ -198,8 +206,8 @@ class SplatfactoModel(Model):
             features_dc = torch.nn.Parameter(shs[:, 0, :])
             features_rest = torch.nn.Parameter(shs[:, 1:, :])
         else:
-            features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
-            features_rest = torch.nn.Parameter(torch.zeros((num_points, dim_sh - 1, 3)))
+            features_dc = torch.nn.Parameter(torch.rand(num_points, 141))
+            features_rest = torch.nn.Parameter(torch.zeros((num_points, dim_sh - 1, 141)))
 
         opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
         self.gauss_params = torch.nn.ParameterDict(
@@ -649,11 +657,11 @@ class SplatfactoModel(Model):
         # get the background color
         if self.training:
             if self.config.background_color == "random":
-                background = torch.rand(3, device=self.device)
+                background = torch.rand(141, device=self.device)
             elif self.config.background_color == "white":
-                background = torch.ones(3, device=self.device)
+                background = torch.ones(141, device=self.device)
             elif self.config.background_color == "black":
-                background = torch.zeros(3, device=self.device)
+                background = torch.zeros(141, device=self.device)
             else:
                 background = self.background_color.to(self.device)
         else:
@@ -661,6 +669,10 @@ class SplatfactoModel(Model):
                 background = renderers.BACKGROUND_COLOR_OVERRIDE.to(self.device)
             else:
                 background = self.background_color.to(self.device)
+            #Make it a 141 channel tensor
+            #print(f"Background shape before: {background.shape}")
+            background = background.repeat(141//background.shape[0])
+            #print(f"Background shape after: {background.shape}")
 
         if self.crop_box is not None and not self.training:
             crop_ids = self.crop_box.within(self.means).squeeze()
@@ -741,7 +753,9 @@ class SplatfactoModel(Model):
             viewdirs = means_crop.detach() - camera.camera_to_worlds.detach()[..., :3, 3]  # (N, 3)
             viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
+            #n = 141 if self.config.hyperspectral else n
             rgbs = spherical_harmonics(n, viewdirs, colors_crop)
+            #print(rgbs.shape)
             rgbs = torch.clamp(rgbs + 0.5, min=0.0)  # type: ignore
         else:
             rgbs = torch.sigmoid(colors_crop[:, 0, :])
@@ -800,6 +814,10 @@ class SplatfactoModel(Model):
         """
         if image.dtype == torch.uint8:
             image = image.float() / 255.0
+        """if image.shape[2] > 3:
+            #Use the rgb_output_channels to get the ground truth image
+            image = image[..., self.rgb_output_channels]
+            #print(gt_img.shape)"""
         gt_img = self._downscale_if_required(image)
         return gt_img.to(self.device)
 
@@ -824,6 +842,8 @@ class SplatfactoModel(Model):
             batch: ground truth batch corresponding to outputs
         """
         gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
+
+        #print(gt_rgb.shape)
         metrics_dict = {}
         predicted_rgb = outputs["rgb"]
         metrics_dict["psnr"] = self.psnr(predicted_rgb, gt_rgb)
@@ -853,7 +873,8 @@ class SplatfactoModel(Model):
             pred_img = pred_img * mask
 
         Ll1 = torch.abs(gt_img - pred_img).mean()
-        simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img.permute(2, 0, 1)[None, ...])
+        
+        simloss = 1 - self.ssim(gt_img[:,:,:3].permute(2, 0, 1)[None, ...], pred_img[:,:,:3].permute(2, 0, 1)[None, ...])
         if self.config.use_scale_regularization and self.step % 10 == 0:
             scale_exp = torch.exp(self.scales)
             scale_reg = (
@@ -911,14 +932,17 @@ class SplatfactoModel(Model):
             predicted_rgb = outputs["rgb"]
 
         combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
+        #Use only the RGB channels in the combined image
+        combined_rgb = combined_rgb[:,:,:3]
+        
 
         # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
         gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
         predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
 
         psnr = self.psnr(gt_rgb, predicted_rgb)
-        ssim = self.ssim(gt_rgb, predicted_rgb)
-        lpips = self.lpips(gt_rgb, predicted_rgb)
+        ssim = self.ssim(gt_rgb[:,:3], predicted_rgb[:,:3])
+        lpips = self.lpips(gt_rgb[:,:3], predicted_rgb[:,:3])
 
         # all of these metrics will be logged as scalars
         metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
