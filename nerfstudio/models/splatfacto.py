@@ -819,7 +819,7 @@ class SplatfactoModel(Model):
             image = image[..., self.rgb_output_channels]
             #print(gt_img.shape)"""
         gt_img = self._downscale_if_required(image)
-        return gt_img.to(self.device)
+        return gt_img
 
     def composite_with_background(self, image, background) -> torch.Tensor:
         """Composite the ground truth image with a background color when it has an alpha channel.
@@ -861,7 +861,6 @@ class SplatfactoModel(Model):
         """
         gt_img = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         pred_img = outputs["rgb"]
-
         # Set masked part of both ground-truth and rendered image to black.
         # This is a little bit sketchy for the SSIM loss.
         if "mask" in batch:
