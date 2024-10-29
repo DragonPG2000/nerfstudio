@@ -37,7 +37,7 @@ class Wavelength_encoding(nn.Module):
     def __init__(
         self,
         mlp_num_layers: int = 4,
-        mlp_layer_width: int = 1024,
+        mlp_layer_width: int = 2048,
         skip_connections: Tuple[int] = (4,),
     ) -> None:
         super().__init__()

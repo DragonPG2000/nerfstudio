@@ -739,7 +739,7 @@ method_configs["hyperspectral-splatfacto"] = TrainerConfig(
     steps_per_eval_batch=0,
     steps_per_save=2000,
     steps_per_eval_all_images=1000,
-    max_num_iterations=30000,
+    max_num_iterations=60000,
     mixed_precision=False,
     pipeline=VanillaPipelineConfig(
         datamanager=HyperspectralDatamanagerConfig(
@@ -747,7 +747,7 @@ method_configs["hyperspectral-splatfacto"] = TrainerConfig(
             dataparser=NerfstudioDataParserConfig(load_3D_points=True),
             cache_images_type="uint8",
         ),
-        model=SplatfactoModelConfig_Hs(background_color="black", hyperspectral=True,hyperspectral_channels=[i for i in range(141)]),
+        model=SplatfactoModelConfig_Hs(background_color="black", hyperspectral=True,hyperspectral_channels=[i for i in range(141)],eval_num_rays_per_chunk= 8192),
     ),
 
     optimizers={
