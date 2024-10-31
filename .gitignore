@@ -190,3 +190,8 @@ camera_paths/
 
 *.pt
 *.jpg
+*.sh
+*transform*.json
+*.zip
+*.out
+*.err
