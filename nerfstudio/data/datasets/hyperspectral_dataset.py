@@ -36,11 +36,17 @@ class HyperspectralDataset(InputDataset):
     def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0):
         super().__init__(dataparser_outputs, scale_factor)
         assert scale_factor == 1, 'Scale factors not yet supported for hyperspectral'
+        print(dataparser_outputs.metadata["latent_filenames"])
         assert (
             "hs_filenames" in dataparser_outputs.metadata.keys()
             and dataparser_outputs.metadata["hs_filenames"] is not None
         )
+        assert (
+            "latent_filenames" in dataparser_outputs.metadata.keys()
+            and dataparser_outputs.metadata["latent_filenames"] is not None
+        )
         self.hs_filenames = self.metadata["hs_filenames"]
+        self.latent_filenames = self.metadata["latent_filenames"]
 
     def get_metadata(self, data: Dict) -> Dict:
         filepath = self.hs_filenames[data["image_idx"]]
@@ -58,12 +64,18 @@ class HyperspectralDataset(InputDataset):
         filepath = self.hs_filenames[image_idx]
         hs_image = torch.load(filepath)
 
+        #Load latent image
+        latent_filepath = self.latent_filenames[image_idx]
+        latent_image = torch.load(latent_filepath)
+
         if image_type == "uint8":
             hs_image = (hs_image * 255).to(torch.uint8)
+            latent_image = latent_image.to(torch.uint8)
         else:
             hs_image = hs_image.to(torch.float32)
+            latent_image = latent_image.to(torch.float32)
 
-        data = {"image": hs_image} 
+        data = {"image": hs_image, "latent": latent_image}
         if self._dataparser_outputs.mask_filenames is not None:
             mask_filepath = self._dataparser_outputs.mask_filenames[image_idx]
             data["mask"] = get_image_mask_tensor_from_path(filepath=mask_filepath, scale_factor=self.scale_factor)

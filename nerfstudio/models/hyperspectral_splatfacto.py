@@ -37,7 +37,7 @@ from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.engine.optimizers import Optimizers
-
+from nerfstudio.data.utils.vae import load_model, infer
 # need following import for background color override
 from nerfstudio.model_components import renderers
 from nerfstudio.models.base_model import Model, ModelConfig
@@ -45,7 +45,9 @@ from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
 # Import wavelegth encoding
-from nerfstudio.field_components.wavelength_encoding import Wavelength_encoding
+# from nerfstudio.field_components.wavelength_encoding import Wavelength_encoding,Wavelength_encoding_without_position
+
+from nerfstudio.field_components.wavelength_encoding import View_MLP
 
 import torch.nn.functional as F #For softmax
 
@@ -85,6 +87,8 @@ def SH2RGB(sh):
     """
     C0 = 0.28209479177387814
     return sh * C0 + 0.5
+
+
 
 
 @dataclass
@@ -168,7 +172,6 @@ class SplatfactoModelConfig_Hs(ModelConfig):
     wavelength_encoding: bool = False
     spectral_loss: bool = False
     wavelength_encoding_lambda: float = 0.01
-    
 
 
 class SplatfactoModel_Hs(Model):
@@ -193,6 +196,13 @@ class SplatfactoModel_Hs(Model):
         self.rgb_output_channels.sort()
         print(f"RGB output channels: {self.rgb_output_channels}")
 
+        #Load the VAE model
+        self.vae_model = load_model("/nethome/skumar704/flash/hyperspectral_3d/PyTorch-VAE/vae_checkpoints_v3/model_checkpoint_FAKEPLANT_12_epoch_100.pt", 'cpu').decoder.to(self.device)
+        for param in self.vae_model.parameters():
+            param.requires_grad = False
+        print("Loaded the model")
+
+
     def populate_modules(self):
         if self.seed_points is not None and not self.config.random_init:
             means = torch.nn.Parameter(self.seed_points[0])  # (Location, Color)
@@ -209,7 +219,10 @@ class SplatfactoModel_Hs(Model):
         quats = torch.nn.Parameter(random_quat_tensor(num_points))
         dim_sh = num_sh_bases(self.config.sh_degree)
 
-        self.wavelength_encoding = Wavelength_encoding()
+        # self.wavelength_encoding = Wavelength_encoding()
+        # self.wavelength_encoding = Wavelength_encoding_without_position()
+
+        self.view_mlp = View_MLP()
 
 
         if (
@@ -232,17 +245,19 @@ class SplatfactoModel_Hs(Model):
             features_rest = torch.nn.Parameter(torch.zeros((num_points, dim_sh - 1, 141)))
         # print("Before hyperspectral", features_rest.shape)
         
-        if self.config.hyperspectral and self.config.wavelength_encoding:
-            #Use wavelength encoding to encode the wavelengths
-            wavelengths = torch.tensor([self.config.hyperspectral_channels], dtype=torch.float32).unsqueeze(0) # (1, 141)
-            wavelengths = wavelengths.unsqueeze(-1) # (1, 141, 1)
-            wavelength_offset = self.wavelength_encoding(wavelengths).unsqueeze(0)  # (1, 1, 141, 1)
-            #Make wavelength_offset the same size as the rgb image using broadcasting
-            wavelength_offset = wavelength_offset.squeeze(-1) # (1, 1, 141)
-            features_dc = features_dc + self.config.wavelength_encoding_lambda*wavelength_offset.squeeze(1).squeeze(0) # (num_points, 141)
-            # print("wavelegth offset shape", wavelength_offset.unsqueeze(1).shape)
-            # print("features_rest shape", features_rest.shape)
-            features_rest = features_rest + self.config.wavelength_encoding_lambda*wavelength_offset.squeeze(0) # (num_points, dim_sh - 1, 141)
+        # if self.config.hyperspectral and self.config.wavelength_encoding:
+        #     #Obtain viewdirs (Nx3) from camera
+        #     viewdirs = torch.tensor([0, 0, 1], dtype=torch.float32).unsqueeze(0).repeat(num_points, 1) # (num_points, 3)
+        #     #Use wavelength encoding to encode the wavelengths
+        #     wavelengths = torch.tensor([self.config.hyperspectral_channels], dtype=torch.float32).unsqueeze(0) # (1, 141)
+        #     wavelengths = wavelengths.unsqueeze(-1) # (1, 141, 1)
+        #     wavelength_offset = self.wavelength_encoding(wavelengths,means).unsqueeze(0)  # (1, 1, 141, 1)
+        #     #Make wavelength_offset the same size as the rgb image using broadcasting
+        #     wavelength_offset = wavelength_offset.squeeze(-1) # (1, 1, 141)
+        #     features_dc = features_dc + self.config.wavelength_encoding_lambda*wavelength_offset.squeeze(1).squeeze(0) # (num_points, 141)
+        #     # print("wavelegth offset shape", wavelength_offset.unsqueeze(1).shape)
+        #     # print("features_rest shape", features_rest.shape)
+        #     features_rest = features_rest + self.config.wavelength_encoding_lambda*wavelength_offset.squeeze(0) # (num_points, dim_sh - 1, 141)
 
         opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
         self.gauss_params = torch.nn.ParameterDict(
@@ -265,7 +280,7 @@ class SplatfactoModel_Hs(Model):
 
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.kl = torch.nn.KLDivLoss()
-        self.kl_weight = 1.0
+        self.kl_weight = 0.3
         self.step = 0
 
         self.crop_box: Optional[OrientedBox] = None
@@ -326,8 +341,8 @@ class SplatfactoModel_Hs(Model):
         hs_image = hs_image.permute(0, 2, 3, 1) #1,512,640,141
 
         K = torch.tensor(self.config.alt_rgb_K, device=hs_image.device)
-        print(f"K shape: {K.shape}")
-        print(hs_image[:, :, :, rgb_inds].shape)
+        # print(f"K shape: {K.shape}")
+        # print(hs_image[:, :, :, rgb_inds].shape)
         pseudo_rgb = (hs_image[:, :, :, rgb_inds] @ K[:-1, :] + K[-1] / 256.).clip(0, 1)
         pseudo_rgb = pseudo_rgb.permute(0, 3, 1, 2) #1,3,512,640
         return pseudo_rgb
@@ -762,22 +777,22 @@ class SplatfactoModel_Hs(Model):
             scales_crop = self.scales[crop_ids]
             quats_crop = self.quats[crop_ids]
         else:
-            opacities_crop = self.opacities
+            opacities_crop = self.opacities #Nx1
             means_crop = self.means
-            features_dc_crop = self.features_dc
-            features_rest_crop = self.features_rest
-            scales_crop = self.scales
-            quats_crop = self.quats
+            features_dc_crop = self.features_dc #Nx141
+            features_rest_crop = self.features_rest #Nx140x141
+            scales_crop = self.scales #Nx3
+            quats_crop = self.quats #Nx4
         
-        if self.config.hyperspectral and self.config.wavelength_encoding:
-            #Use wavelength encoding to encode the wavelengths
-            wavelengths = torch.tensor([self.config.hyperspectral_channels], dtype=torch.float32, device = self.device).unsqueeze(0) # (1, 141)
-            wavelengths = wavelengths.unsqueeze(-1) # (1, 141, 1)
-            wavelength_offset = self.wavelength_encoding(wavelengths).unsqueeze(0)  # (1, 1, 141, 1)
-            #Make wavelength_offset the same size as the rgb image using broadcasting
-            wavelength_offset = wavelength_offset.squeeze(-1) # (1, 1, 141)
-            features_dc_crop = features_dc_crop + self.config.wavelength_encoding_lambda*wavelength_offset.squeeze(1).squeeze(0) # (num_points, 141)
-            features_rest_crop = features_rest_crop + self.config.wavelength_encoding_lambda*wavelength_offset.squeeze(0) # (num_points, dim_sh - 1, 141)
+        # if self.config.hyperspectral and self.config.wavelength_encoding:
+        #     #Use wavelength encoding to encode the wavelengths
+        #     wavelengths = torch.tensor([self.config.hyperspectral_channels], dtype=torch.float32, device = self.device).unsqueeze(0) # (1, 141)
+        #     wavelengths = wavelengths.unsqueeze(-1) # (1, 141, 1)
+        #     wavelength_offset = self.wavelength_encoding(wavelengths, means_crop).unsqueeze(0)  # (1, 1, 141, 1)
+        #     #Make wavelength_offset the same size as the rgb image using broadcasting
+        #     wavelength_offset = wavelength_offset.squeeze(-1) # (1, 1, 141)
+        #     features_dc_crop = features_dc_crop + self.config.wavelength_encoding_lambda*wavelength_offset.squeeze(1).squeeze(0) # (num_points, 141)
+        #     features_rest_crop = features_rest_crop + self.config.wavelength_encoding_lambda*wavelength_offset.squeeze(0) # (num_points, dim_sh - 1, 141)
         
         # print(f"Features DC crop shape: {features_dc_crop.shape}")
         # print(f"Features rest crop shape: {features_rest_crop.shape}")
@@ -826,7 +841,15 @@ class SplatfactoModel_Hs(Model):
         if self.config.sh_degree > 0:
             viewdirs = means_crop.detach() - camera.camera_to_worlds.detach()[..., :3, 3]  # (N, 3)
             viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
+            # print("Viewdirs shape: ", viewdirs.shape)
+            # print("Opacities crop shape: ", opacities_crop.shape)
+            # print("Colors crop shape: ", colors_crop.shape)
+            # print("Means crop shape: ", means_crop.shape)
             n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
+
+            # colors_crop_mlp, opacities_crop_mlp = self.view_mlp(viewdirs, means_crop, opacities_crop, colors_crop)
+            # colors_crop = colors_crop * colors_crop_mlp
+            # opacities_crop = opacities_crop * opacities_crop_mlp
             #n = 141 if self.config.hyperspectral else n
             rgbs = spherical_harmonics(n, viewdirs, colors_crop)
             #print(rgbs.shape)
@@ -844,6 +867,7 @@ class SplatfactoModel_Hs(Model):
             opacities = torch.sigmoid(opacities_crop)
         else:
             raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
+        # print("Background shape", background.shape)
 
         rgb, alpha = rasterize_gaussians(  # type: ignore
             self.xys,
@@ -880,8 +904,12 @@ class SplatfactoModel_Hs(Model):
             #rgb = rgb + wavelength_offset
             rgb = torch.clamp(rgb, max=1.0)  # type: ignore
             rgb = torch.clamp(rgb, min=0.0)  # type: ignore
-            # print(rgb.shape)
+            rgb = rgb[:,:,:64]
+            # print("Image shape", rgb.shape)
             # print(wavelength_offset.shape)
+
+            #Get the first 64 channels of the hyperspectral image
+            #rgb = rgb[:, :, :64]
 
             #Get wavelgnth to the same number of dimensions as rgb
              
@@ -923,11 +951,24 @@ class SplatfactoModel_Hs(Model):
             outputs: the output to compute loss dict to
             batch: ground truth batch corresponding to outputs
         """
-        gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
-
+        # print("Latent shape", batch["latent"].shape)
+        # gt_rgb  = self.vae_model(batch["latent"].float().to(self.device))
+        # print("Image before composite: ", gt_rgb.shape)
+        # gt_rgb = gt_rgb[0].permute(1, 2, 0)
+        gt_rgb = batch['image']
+        gt_rgb = self.composite_with_background(self.get_gt_img(gt_rgb), outputs["background"])
+        print("Image after composite: ", gt_rgb.shape)
         #print(gt_rgb.shape)
         metrics_dict = {}
         predicted_rgb = outputs["rgb"]
+        # print(f"Predicted RGB shape: {predicted_rgb.shape}")
+        if gt_rgb.shape[2] == 128:
+            #Get 128 channels from the hyperspectral image
+            predicted_rgb = predicted_rgb[:, :, :128]
+        if predicted_rgb.shape[2] == 64:
+            predicted_rgb = self.vae_model(predicted_rgb.permute(2, 0, 1)[None, ...])
+            predicted_rgb = predicted_rgb[0].permute(1, 2, 0)
+        # print(f"Predicted RGB shape after: {predicted_rgb.shape}")
         metrics_dict["psnr"] = self.psnr(predicted_rgb, gt_rgb)
 
         metrics_dict["gaussian_count"] = self.num_points
@@ -941,7 +982,10 @@ class SplatfactoModel_Hs(Model):
             batch: ground truth batch corresponding to outputs
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
-        gt_img = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
+        # gt_img  = self.vae_model(batch["latent"].float().to(self.device))
+        # gt_img = gt_img[0].permute(1, 2, 0)
+        gt_img = batch['image']
+        gt_img = self.composite_with_background(self.get_gt_img(gt_img), outputs["background"])
         pred_img = outputs["rgb"]
         # Set masked part of both ground-truth and rendered image to black.
         # This is a little bit sketchy for the SSIM loss.
@@ -952,6 +996,13 @@ class SplatfactoModel_Hs(Model):
             assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
             gt_img = gt_img * mask
             pred_img = pred_img * mask
+        
+        if gt_img.shape[2] == 128:
+            #Get 128 channels from the hyperspectral image
+            pred_img = pred_img[:, :, :128]
+        if pred_img.shape[2] == 64:
+            pred_img = self.vae_model(pred_img.permute(2, 0, 1)[None, ...])
+            pred_img = pred_img[0].permute(1, 2, 0)
 
         Ll1 = torch.abs(gt_img - pred_img).mean()
 
@@ -976,8 +1027,8 @@ class SplatfactoModel_Hs(Model):
             #Apply softmax to the spatial dimension of the image
             # pred_img_prob = pred_img.reshape(141, -1)
             # gt_img_prob = gt_img.reshape(141, -1)
-            pred_img_prob = pred_img.reshape(-1, 141)
-            gt_img_prob = gt_img.reshape(-1, 141)
+            pred_img_prob = pred_img.reshape(-1, gt_img.shape[2])
+            gt_img_prob = gt_img.reshape(-1, gt_img.shape[2])
             pred_img_prob = F.log_softmax(pred_img_prob, dim=1)
             gt_img_prob = F.softmax(gt_img_prob, dim=1)
 
@@ -1029,7 +1080,10 @@ class SplatfactoModel_Hs(Model):
         Returns:
             A dictionary of metrics.
         """
-        gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
+        # gt_rgb  = self.vae_model(batch["latent"].float().to(self.device))
+        # gt_rgb = gt_rgb[0].permute(1, 2, 0)
+        gt_rgb = batch['image']
+        gt_rgb = self.composite_with_background(self.get_gt_img(gt_rgb), outputs["background"])
         d = self._get_downscale_factor()
         if d > 1:
             # torchvision can be slow to import, so we do it lazily.
@@ -1043,13 +1097,20 @@ class SplatfactoModel_Hs(Model):
         # print(predicted_rgb.shape)
         # print(gt_rgb.shape)
 
+        if gt_rgb.shape[2] == 128:
+            #Get 128 channels from the hyperspectral image
+            predicted_rgb = predicted_rgb[:, :, :128]
+        if predicted_rgb.shape[2] == 64:
+            predicted_rgb = self.vae_model(predicted_rgb.permute(2, 0, 1)[None, ...])
+            predicted_rgb = predicted_rgb[0].permute(1, 2, 0)
+
         combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
         #Use only the RGB channels in the combined image
         start = combined_rgb[:,:,:3]
 
         midpoint_rgb = combined_rgb[:,:,70:73]
 
-        end_rgb = combined_rgb[:,:,138:141]
+        end_rgb = combined_rgb[:,:,-3:]
 
         #combined_rgb = torch.cat([combined_rgb, midpoint_rgb, end_rgb], dim=1)
         
@@ -1058,7 +1119,7 @@ class SplatfactoModel_Hs(Model):
         gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
         predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
 
-        psnr = self.psnr(gt_rgb, predicted_rgb)
+        psnr = self.psnr(gt_rgb, -1*predicted_rgb)
         #Calculate lpips using rgb wavelengths
 
         gt_rgb = self.hs2rgb(gt_rgb)

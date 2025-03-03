@@ -88,7 +88,7 @@ descriptions = {
     "neus-facto": "Implementation of NeuS-Facto. (slow)",
     "splatfacto": "Gaussian Splatting model",
     "hyperspectral-splatfacto-rgb": "Hyperspectral Splatting model",
-    "hyperspectral-splatfacto": "Hyperspectral Splatting model",
+    "hyperspectral_splatfacto": "Hyperspectral Splatting model",
 }
 
 method_configs["nerfacto"] = TrainerConfig(
@@ -733,13 +733,13 @@ method_configs["hyperspectral-splatfacto-rgb"] = TrainerConfig(
     vis="viewer",
 )
 
-method_configs["hyperspectral-splatfacto"] = TrainerConfig(
+method_configs["hyperspectral_splatfacto"] = TrainerConfig(
     method_name="hyperspectral_splatfacto",
     steps_per_eval_image=100,
     steps_per_eval_batch=0,
     steps_per_save=2000,
     steps_per_eval_all_images=1000,
-    max_num_iterations=60000,
+    max_num_iterations=80000,
     mixed_precision=False,
     pipeline=VanillaPipelineConfig(
         datamanager=HyperspectralDatamanagerConfig(
@@ -747,7 +747,59 @@ method_configs["hyperspectral-splatfacto"] = TrainerConfig(
             dataparser=NerfstudioDataParserConfig(load_3D_points=True),
             cache_images_type="uint8",
         ),
-        model=SplatfactoModelConfig_Hs(background_color="black", hyperspectral=True,hyperspectral_channels=[i for i in range(141)],eval_num_rays_per_chunk= 8192,wavelength_encoding=True,spectral_loss=True),
+        model=SplatfactoModelConfig_Hs(background_color="black", hyperspectral=True,hyperspectral_channels=[i for i in range(141)],eval_num_rays_per_chunk= 8192,wavelength_encoding=True,spectral_loss=True,),
+    ),
+
+    optimizers={
+        "means": {
+            "optimizer": AdamOptimizerConfig(lr=1.6e-5, eps=1e-15),
+            "scheduler": ExponentialDecaySchedulerConfig(
+                lr_final=1.6e-6,
+                max_steps=30000,
+            ),
+        },
+        "features_dc": {
+            "optimizer": AdamOptimizerConfig(lr=0.00025, eps=1e-15),
+            "scheduler": None,
+        },
+        "features_rest": {
+            "optimizer": AdamOptimizerConfig(lr=0.00025 / 20, eps=1e-15),
+            "scheduler": None,
+        },
+        "opacities": {
+            "optimizer": AdamOptimizerConfig(lr=0.005, eps=1e-15),
+            "scheduler": None,
+        },
+        "scales": {
+            "optimizer": AdamOptimizerConfig(lr=0.0005, eps=1e-15),
+            "scheduler": None,
+        },
+        "quats": {"optimizer": AdamOptimizerConfig(lr=0.0001, eps=1e-15), "scheduler": None},
+        "camera_opt": {
+            "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=5e-6, max_steps=30000),
+        },
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+    vis="viewer",
+)
+
+
+method_configs["hyperspectral_splatfacto_no_position"] = TrainerConfig(
+    method_name="hyperspectral_splatfacto",
+    steps_per_eval_image=100,
+    steps_per_eval_batch=0,
+    steps_per_save=2000,
+    steps_per_eval_all_images=1000,
+    max_num_iterations=80000,
+    mixed_precision=False,
+    pipeline=VanillaPipelineConfig(
+        datamanager=HyperspectralDatamanagerConfig(
+            _target=HyperspectralDatamanager,
+            dataparser=NerfstudioDataParserConfig(load_3D_points=True),
+            cache_images_type="uint8",
+        ),
+        model=SplatfactoModelConfig_Hs(background_color="black", hyperspectral=True,hyperspectral_channels=[i for i in range(141)],eval_num_rays_per_chunk= 8192,wavelength_encoding=True,spectral_loss=True,wavelength_encoding_lambda=0.01),
     ),
 
     optimizers={
@@ -893,7 +945,7 @@ method_configs["n-splatfacto_spectral"] = TrainerConfig(
     steps_per_eval_batch=0,
     steps_per_save=2000,
     steps_per_eval_all_images=1000,
-    max_num_iterations=60000,
+    max_num_iterations=80000,
     mixed_precision=False,
     pipeline=VanillaPipelineConfig(
         datamanager=HyperspectralDatamanagerConfig(

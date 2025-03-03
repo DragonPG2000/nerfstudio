@@ -101,6 +101,7 @@ class Nerfstudio(DataParser):
         depth_filenames = []
         poses = []
         hs_filenames = []
+        latent_filenames = []
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -187,7 +188,11 @@ class Nerfstudio(DataParser):
                 hs_filepath = Path(frame["hyperspectral_file_path"])
                 hs_fname = self._get_fname(hs_filepath, data_dir, downsample_folder_prefix="hss_")
                 hs_filenames.append(hs_fname)
-
+            
+            if "latent_path" in frame:
+                latent_filepath = Path(frame["latent_path"])
+                latent_fname = self._get_fname(latent_filepath, data_dir, downsample_folder_prefix="latents_")
+                latent_filenames.append(latent_fname)
         assert len(mask_filenames) == 0 or (len(mask_filenames) == len(image_filenames)), """
         Different number of image and mask filenames.
         You should check that mask_path is specified for every frame (or zero frames) in transforms.json.
@@ -197,7 +202,7 @@ class Nerfstudio(DataParser):
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
         """
 
-        assert len(hs_filenames) == 0 or (len(hs_filenames) == len(image_filenames)), """
+        assert len(hs_filenames) == 0 or (len(hs_filenames) == len(image_filenames) or len(latent_filenames)), """
         Different number of image and hyperspectral filenames.
         You should check that hs_file_path is specified for every frame (or zero frames) in transforms.json.
         """
@@ -264,6 +269,7 @@ class Nerfstudio(DataParser):
         mask_filenames = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
         depth_filenames = [depth_filenames[i] for i in indices] if len(depth_filenames) > 0 else []
         hs_filenames = [hs_filenames[i] for i in indices] if len(hs_filenames) > 0 else []
+        latent_filenames = [latent_filenames[i] for i in indices] if len(latent_filenames) > 0 else []
 
 
         idx_tensor = torch.tensor(indices, dtype=torch.long)
@@ -428,6 +434,7 @@ class Nerfstudio(DataParser):
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                 "mask_color": self.config.mask_color,
                 "hs_filenames": hs_filenames if len(hs_filenames) > 0 else None,
+                "latent_filenames": latent_filenames if len(latent_filenames) > 0 else None,
                 **metadata,
             },
         )

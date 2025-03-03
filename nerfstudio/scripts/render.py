@@ -59,6 +59,46 @@ from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE, ItersPerSecColumn
 from nerfstudio.utils.scripts import run_command
 
+#Import Hyperspectral related classes
+from nerfstudio.data.datamanagers.hyperspectral_datamanager import HyperspectralDatamanagerConfig, HyperspectralDatamanager
+from nerfstudio.data.datasets.hyperspectral_dataset import HyperspectralDataset
+
+alt_rgb_K = [[0.7730080007942016, 0.535533997779176, 0.6526651958156037],
+                [1.414780009790509, 2.065529433404396, 3.0438870954713138],
+                [1.4773863942703649, -0.8240144016241694, 1.933859631365789],
+                [-0.34568228643051996, 0.7522634529835492, -1.6587064231164854],
+                [-12.904164189025236, 8.095959165877666, -23.779234868708237]]
+
+def hs2rgb(hs_image):
+    """Convert hyperspectral image to RGB using predefined indices and transformation matrix.
+
+    Args:
+        hs_image: Hyperspectral image numpy array of shape (1, 141, 512, 640).
+
+    Returns:
+        Pseudo-RGB image numpy array of shape (1, 3, 512, 640).
+    """
+
+    #reshape from 1,height,width,141 to 1,141,height,width 
+    hs_image = np.transpose(hs_image, (0, 3, 1, 2))
+    rgb_inds = [8, 18, 28, 38]  # Indices corresponding to 620, 555, 503, 442 nm wavelengths
+
+    # Permute the dimensions to (1, 512, 640, 141)
+    hs_image = np.transpose(hs_image, (0, 2, 3, 1))
+
+    # Transformation matrix
+    K = np.array(alt_rgb_K)
+    print(f"K shape: {K.shape}")
+    print(hs_image[:, :, :, rgb_inds].shape)
+
+    # Apply the transformation and clip the values to [0, 1]
+    pseudo_rgb = np.clip(np.dot(hs_image[:, :, :, rgb_inds], K[:-1, :]) + K[-1] / 256., 0, 1)
+
+    # Permute back to (1, 3, 512, 640)
+    pseudo_rgb = np.transpose(pseudo_rgb, (0, 3, 1, 2))
+    print(f"Pseudo RGB shape: {pseudo_rgb.shape}")
+    return pseudo_rgb
+
 
 def _render_trajectory_video(
     pipeline: Pipeline,
@@ -221,14 +261,28 @@ def _render_trajectory_video(
                             .numpy()
                         )
                     else:
-                        output_image = (
-                            colormaps.apply_colormap(
-                                image=output_image,
-                                colormap_options=colormap_options,
-                            )
-                            .cpu()
-                            .numpy()
-                        )
+                        # output_image = (
+                        #     colormaps.apply_colormap(
+                        #         image=output_image,
+                        #         colormap_options=colormap_options,
+                        #     )
+                        #     .cpu()
+                        #     .numpy()
+                        # )
+                        print(output_image.shape)
+                        out_img_copy = output_image.cpu().numpy()
+                        #Save the output image as a numpy array
+                        start = output_image[:, :, :3].cpu().numpy()
+                        mid = output_image[:, :, 70:73].cpu().numpy()
+                        end = output_image[:, :, -3:].cpu().numpy()
+                        output_image = np.concatenate([start, mid, end], axis=1)
+                        #get the batch expand 
+                        out_hs = np.expand_dims(out_img_copy, axis=0)
+                        pseudo_rgb = hs2rgb(out_hs)
+                        out_hs = out_hs[0]
+                        np.save(f"/nethome/skumar704/flash/output_{camera_idx}.npy", out_hs)
+                        np.save(f"/nethome/skumar704/flash/rgb_{camera_idx}.npy", pseudo_rgb)
+                        
                     render_image.append(output_image)
 
                 # Add closest training image to the right of the rendered image
@@ -662,6 +716,7 @@ class SpiralRender(BaseRender):
                 VanillaDataManager,
                 ParallelDataManager,
                 RandomCamerasDataManager,
+                HyperspectralDatamanager
             ),
         )
         steps = int(self.frame_rate * self.seconds)
